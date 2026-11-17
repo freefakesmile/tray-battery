@@ -1,5 +1,5 @@
-<!-- 2026-11-17 12:00 -->
-<!-- Added MCHOSE G3 V2 and SteelSeries Arctis Nova 3X Wireless; widget shows only devices present on the PC -->
+<!-- 2026-11-17 13:00 -->
+<!-- Added MCHOSE G3 V2 and SteelSeries Arctis Nova 3X Wireless; widget shows only devices present on the PC; new devices verified -->
 
 # TrayBattery
 
@@ -19,8 +19,8 @@ Supported devices:
 |---|---|---|
 | ATK MAD R+ (mouse) | `373B:1040` | verified |
 | HyperX Cloud III S Wireless (headset) | `03F0:06BE` / `03F0:02CC` | verified |
-| MCHOSE G3 V2 (mouse) | `3837:4245` | from public protocol notes, being tested |
-| SteelSeries Arctis Nova 3X / 3P Wireless (headset) | `1038:226D` / `1038:2269` | from public protocol notes, being tested |
+| MCHOSE G3 V2 (mouse) | `3837:4245` | verified (charging flag not yet) |
+| SteelSeries Arctis Nova 3X / 3P Wireless (headset) | `1038:226D` / `1038:2269` | verified (charging flag not yet) |
 
 The same exe runs on any PC. A device is shown while its dongle is plugged in, and keeps its
 place (as "no link") once it has been seen on that PC; devices never seen there don't appear.
