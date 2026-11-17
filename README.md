@@ -1,17 +1,29 @@
-<!-- 2026-11-11 23:47 -->
-<!-- English README; personal-project disclaimer -->
+<!-- 2026-11-17 12:00 -->
+<!-- Added MCHOSE G3 V2 and SteelSeries Arctis Nova 3X Wireless; widget shows only devices present on the PC -->
 
 # TrayBattery
 
-> **A personal project.** I built this for my own setup: one specific mouse, one specific
-> headset, Windows 11. It is published in case the code or the protocol notes help someone, but
+> **A personal project.** I built this for my own setup (and my girlfriend's PC): a couple of
+> specific mice and headsets, Windows 11. It is published in case the code or the protocol notes help someone, but
 > it is not a general-purpose battery monitor. Other devices are not supported unless someone
 > adds them (see [Adding a device](#adding-a-device)), and feature requests are unlikely to be
 > picked up.
 
-A Windows 11 taskbar widget that shows the battery of an **ATK MAD R+** wireless mouse and a
-**HyperX Cloud III S Wireless** headset: a device icon with four dots under it. It sits right on
-the taskbar, just left of the tray arrow. It is always visible and never hides in the overflow.
+A Windows 11 taskbar widget that shows the battery of wireless mice and headsets: a device icon
+with four dots under it. It sits right on the taskbar, just left of the tray arrow. It is always
+visible and never hides in the overflow.
+
+Supported devices:
+
+| Device | Dongle | Status |
+|---|---|---|
+| ATK MAD R+ (mouse) | `373B:1040` | verified |
+| HyperX Cloud III S Wireless (headset) | `03F0:06BE` / `03F0:02CC` | verified |
+| MCHOSE G3 V2 (mouse) | `3837:4245` | from public protocol notes, being tested |
+| SteelSeries Arctis Nova 3X / 3P Wireless (headset) | `1038:226D` / `1038:2269` | from public protocol notes, being tested |
+
+The same exe runs on any PC. A device is shown while its dongle is plugged in, and keeps its
+place (as "no link") once it has been seen on that PC; devices never seen there don't appear.
 
 ![TrayBattery on the taskbar: mouse fully charged, headset off](docs/taskbar-widget.png)
 
@@ -183,4 +195,5 @@ without the widget.
 3. Exchange data with `Hid.Transact(dev, request, isReply, timeoutMs)`. It writes the output
    report and waits for an input report for which `isReply` returns `true`.
 4. If the device sends reports on its own, override `PushCollection()` and `ApplyPush(...)`.
-5. Add it to `all` in the `App` constructor. Its place on the taskbar is set in Settings.
+5. Add it to `Gadget.All()`, and override `Present()` if its dongle is not found through
+   `PushCollection()`. Its place on the taskbar is set in Settings.

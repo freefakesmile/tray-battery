@@ -1,5 +1,5 @@
-<!-- 2026-11-11 23:47 -->
-<!-- English version of the protocol notes -->
+<!-- 2026-11-17 12:00 -->
+<!-- Added MCHOSE G3 V2 and SteelSeries Arctis Nova 3X Wireless (from public notes, not yet verified here) -->
 
 # Protocols
 
@@ -174,6 +174,55 @@ While the headset is off, `06` answers `FF`.
 
 - According to HyperHeadset #36, after the dongle is replugged it sometimes stops answering
   until it is reconnected again or the PC restarts.
+
+---
+
+## MCHOSE G3 V2 (dongle `3837:4245`)
+
+Not verified on this project's own hardware yet; taken from two sources that agree byte for byte:
+[aliezzzz/mchose-battery](https://github.com/aliezzzz/mchose-battery) (`src/protocols/g3.rs`) and
+[evren-oct/vigil-watt](https://github.com/evren-oct/vigil-watt) (`docs/hardware/mchose.md`, verified
+there on a real G3 V2). MCHOSE has several protocol families; the G3 family ("gmouse" in the web
+driver) does **not** speak the L7/A7 feature-report protocol described in
+[alexfrih/mchose-linux](https://github.com/alexfrih/mchose-linux).
+
+- **Collection:** interface 2, usage page `0xFF01`, usage `0x0010`, 64-byte reports with no
+  report id (65 bytes on Windows with the zero id in front). The other vendor collections
+  (`FFA5`, `FF05`, `FF06`) are not the command channel.
+- **Battery request** (output report):
+  ```
+  00 55 30 A5 0B 2E 01 01 01 00 ... 00
+  ```
+- **Reply:** starts with `AA 30` (after the zero report id): battery % at offset +8, charging at +9
+  (0 = not charging, non-zero = charging). A `0` percentage is treated as "no value yet".
+- The mouse sends nothing on its own. When it is asleep or off, the dongle does not answer; the
+  app then shows the last known level as "asleep".
+- `55 0E A5 0B 30 01 01 01` reads the config (DPI stages); not used here.
+
+---
+
+## SteelSeries Arctis Nova 3X Wireless (dongle `1038:226D`; Nova 3P Wireless `1038:2269`)
+
+Not verified on this project's own hardware yet; from
+[Sapd/HeadsetControl](https://github.com/Sapd/HeadsetControl)
+(`lib/devices/steelseries_arctis_nova_3p_wireless.hpp`, `protocols/steelseries_protocol.hpp`),
+which covers the 3P and 3X together.
+
+- **Collection:** interface 3, usage page `0xFFC0`, usage `0x0001`; 64-byte reports, no report id.
+- **Status request** (output report): `00 B0`.
+- **Status report** (data after the zero report id):
+
+  | Byte | Meaning |
+  |---|---|
+  | 0 | `B0` |
+  | 1 | `02` = headset off / not linked |
+  | 3 | battery % |
+  | 4 | `01` = charging |
+
+- The headset also sends `B0` status reports by itself; the app keeps a read open on this
+  collection and applies them at once.
+- Do not send the other commands blindly: `0x09` saves state, `0x39` / `0x37` / `0xA3` / `0x33`
+  change sidetone, volume, auto-off and the equalizer.
 
 ---
 

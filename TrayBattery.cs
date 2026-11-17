@@ -1,5 +1,5 @@
-// 2026-11-11 23:47
-// UI and docs in English; menu device lines are just "<device> | <%>"; repository restarted from one commit
+// 2026-11-17 12:00
+// MCHOSE G3 V2 and SteelSeries Arctis Nova 3X Wireless; the widget shows only devices present or seen before
 
 using System;
 using System.Collections.Generic;
@@ -24,10 +24,12 @@ namespace TrayBattery
             if (args.Length == 2 && args[0] == "--dump")
             {
                 var lines = new List<string>();
-                foreach (var g in new Gadget[] { new AtkMouse(), new HyperXCloud3S() })
+                foreach (var g in Gadget.All())
                 {
+                    bool present = g.Present();
                     var r = g.Query();
-                    lines.Add(string.Format("{0}: online={1} asleep={2} percent={3} charging={4}", g.Name, r.Online, r.Asleep, r.Percent, r.Charging));
+                    lines.Add(string.Format("{0}: present={1} online={2} asleep={3} percent={4} charging={5}",
+                                            g.Name, present, r.Online, r.Asleep, r.Percent, r.Charging));
                 }
                 File.WriteAllLines(args[1], lines);
                 return;
@@ -77,6 +79,15 @@ namespace TrayBattery
 
         // How long to wait after a push that asks for a poll (the last report of a burst restarts it).
         public virtual uint PushPollDelayMs { get { return 1500; } }
+
+        // The dongle is plugged in (cheap: the HID list is cached until the device set changes).
+        public virtual bool Present() { return PushCollection() != null; }
+
+        // Every supported device, in the default taskbar order (left to right).
+        public static Gadget[] All()
+        {
+            return new Gadget[] { new AtkMouse(), new HyperXCloud3S(), new MchoseG3V2(), new ArctisNova3X() };
+        }
     }
 
     // ATK MAD R+ (dongle 373B:1040), collection FF02.
@@ -153,6 +164,7 @@ namespace TrayBattery
         // Report 0D (declared by collection 01C0 together with the 0C replies):
         // byte 4 = 1 -> battery % in byte 5, byte 4 = 10 -> charging state in byte 5.
         public override HidInfo PushCollection() { return Collections().Find(d => d.UsagePage == 0x01C0); }
+        public override bool Present() { return Collections().Count > 0; }
 
         // byte 4 = 0x0C: link state, byte 5 = 1 headset connected (power-on), 0 lost (power-off) — seen 2026-11-11.
         public override bool ApplyPush(byte[] b, ref Reading r, out bool pollNow)
@@ -201,6 +213,94 @@ namespace TrayBattery
             var rep = Hid.Transact(dev, req, b => b[0] == 0x0C && b[5] == cmd, 1500, out written);
             if (!written) return -2;
             return rep == null ? -1 : rep[6];
+        }
+    }
+
+    // MCHOSE G3 V2 (dongle 3837:4245), the "gmouse" protocol of MCHOSE's web driver.
+    // Command channel: interface 2, usage page FF01, usage 0x0010, 64-byte reports without a report id.
+    // Battery request 55 30 A5 0B 2E 01 01 01; reply AA 30 .. with % at +8 and charging (non-zero) at +9.
+    // Sources: aliezzzz/mchose-battery (src/protocols/g3.rs), evren-oct/vigil-watt (docs/hardware/mchose.md).
+    // The mouse pushes nothing; a dongle that does not answer means the mouse is asleep or off.
+    sealed class MchoseG3V2 : Gadget
+    {
+        public override string Name { get { return "MCHOSE G3 V2"; } }
+        public override char Glyph { get { return '\uE962'; } }
+
+        static HidInfo Channel()
+        {
+            return Hid.Find(0x3837, 0x4245).Find(d => d.UsagePage == 0xFF01 && (d.Usage == 0x0010 || d.Usage == 0) && d.OutputLength >= 9);
+        }
+
+        public override bool Present() { return Channel() != null; }
+
+        // The reply may or may not carry the (zero) report id in front.
+        static int Offset(byte[] b) { return b[0] == 0xAA ? 0 : 1; }
+
+        public override Reading Query()
+        {
+            var r = new Reading();
+            var dev = Channel();
+            if (dev == null) return r;
+            var req = new byte[] { 0x00, 0x55, 0x30, 0xA5, 0x0B, 0x2E, 0x01, 0x01, 0x01 };
+            var rep = Hid.Transact(dev, req, b => b.Length > 11 && b[Offset(b)] == 0xAA && b[Offset(b) + 1] == 0x30, 1000);
+            if (rep == null) { r.Asleep = true; return r; }
+            int o = Offset(rep);
+            int pct = rep[o + 8];
+            if (pct < 1 || pct > 100) { r.Asleep = true; return r; }     // 0: dongle has no fresh value yet
+            r.Online = true;
+            r.Percent = pct;
+            r.Charging = rep[o + 9] != 0;
+            return r;
+        }
+    }
+
+    // SteelSeries Arctis Nova 3X Wireless (dongle 1038:226D; the 3P is 1038:2269), interface 3,
+    // usage page FFC0. Request: output report 00 B0; status report B0 <link> .. <%> <charging>:
+    // link 2 = headset off, charging 1 = charging. The headset also sends B0 reports by itself.
+    // Source: Sapd/HeadsetControl (lib/devices/steelseries_arctis_nova_3p_wireless.hpp).
+    sealed class ArctisNova3X : Gadget
+    {
+        public override string Name { get { return "SteelSeries Arctis Nova 3X"; } }
+        public override char Glyph { get { return '\uE7F6'; } }
+
+        static List<HidInfo> Collections()
+        {
+            var list = Hid.Find(0x1038, 0x226D);
+            return list.Count > 0 ? list : Hid.Find(0x1038, 0x2269);
+        }
+
+        public override HidInfo PushCollection() { return Collections().Find(d => d.UsagePage == 0xFFC0 && d.OutputLength >= 2); }
+
+        // Windows puts the (zero) report id in front of the data.
+        static int Offset(byte[] b) { return b[0] == 0xB0 ? 0 : 1; }
+        static bool IsStatus(byte[] b) { return b.Length > 6 && b[Offset(b)] == 0xB0; }
+
+        static bool Parse(byte[] b, ref Reading r)
+        {
+            int o = Offset(b);
+            if (b[o + 1] == 0x02) { r.Online = false; r.Asleep = false; r.Charging = false; return true; }   // headset off
+            if (b[o + 3] > 100) return false;
+            r.Online = true;
+            r.Asleep = false;
+            r.Percent = b[o + 3];
+            r.Charging = b[o + 4] == 0x01;
+            return true;
+        }
+
+        public override bool ApplyPush(byte[] b, ref Reading r, out bool pollNow)
+        {
+            pollNow = false;
+            return IsStatus(b) && Parse(b, ref r);
+        }
+
+        public override Reading Query()
+        {
+            var r = new Reading();
+            var dev = PushCollection();
+            if (dev == null) return r;
+            var rep = Hid.Transact(dev, new byte[] { 0x00, 0xB0 }, IsStatus, 1000);
+            if (rep != null) Parse(rep, ref r);
+            return r;
         }
     }
 
@@ -593,6 +693,7 @@ namespace TrayBattery
         public bool HasValue;
         public DateTime LastSeen;
         public int Known;                 // percent from the last real answer (Last.Percent may be an estimate)
+        public bool Present;              // dongle plugged in (re-read when the USB device set changes)
         public PushListener Listener;
 
         // A mouse asleep on the charger reports nothing until it is moved, so its level is counted here:
@@ -617,7 +718,8 @@ namespace TrayBattery
             if (r.Asleep && !HasValue) r.Asleep = false;     // nothing known yet: nothing to show but "no link"
             if (r.Online) { LastSeen = DateTime.Now; Known = r.Percent; }
             if (r.Asleep && r.Charging && Settings.ChargeRate > 0) r.Percent = Estimate();
-            bool changed = !HasValue || r.Online != Last.Online || r.Asleep != Last.Asleep ||
+            // A device never seen here draws nothing until it answers.
+            bool changed = !HasValue ? r.Online : r.Online != Last.Online || r.Asleep != Last.Asleep ||
                            r.Percent != Last.Percent || r.Charging != Last.Charging;
             // The registry is written only when the level or charging state moves, or when the device
             // goes quiet (asleep / off) — that is the moment whose time the tooltip shows — not on every poll.
@@ -738,7 +840,8 @@ namespace TrayBattery
         const int WM_MOUSEMOVE = 0x0200, WM_LBUTTONUP = 0x0202, WM_RBUTTONUP = 0x0205, WM_MOUSELEAVE = 0x02A3;
         const int WM_SETCURSOR = 0x0020;
 
-        readonly List<Slot> slots;
+        public const int Capacity = 8;        // tooltip tools created up front; the shown set may change
+        readonly List<Slot> slots;            // the shown slots, kept up to date by App
         readonly Action onLeftClick, onRightClick;
         readonly Action<int> onHover;
         IntPtr taskbar, tray, hook, tooltip;
@@ -762,7 +865,7 @@ namespace TrayBattery
             if (tray == IntPtr.Zero) return false;
             if (!Create(Ui.WS_EX_LAYERED, Ui.WS_CHILD | Ui.WS_CLIPSIBLINGS, taskbar, 1, 1)) return false;
 
-            tooltip = Ui.CreateTooltip(Handle, slots.Count);
+            tooltip = Ui.CreateTooltip(Handle, Capacity);
             Layout(true);
 
             // Only the taskbar's own thread: File Explorer windows and other explorer UI never wake us.
@@ -809,7 +912,7 @@ namespace TrayBattery
             Ui.RECT tb, tn;
             if (!Ui.GetWindowRect(taskbar, out tb) || !Ui.GetWindowRect(tray, out tn)) return;
             int nh = tb.Bottom - tb.Top;
-            int nw = Painter.WidgetWidth(slots.Count, nh / 48f);
+            int nw = Math.Max(1, Painter.WidgetWidth(slots.Count, nh / 48f));
             int nx = tn.Left - tb.Left - nw;
             bool resized = nw != w || nh != h;
             if (!resized && nx == x && !forcePaint) return;
@@ -838,6 +941,7 @@ namespace TrayBattery
                         Painter.DrawCell(g, cell, slots[i].Gadget.Glyph, slots[i].Last, light, style, i == hover, s);
                         Ui.SetTooltip(tooltip, Handle, i, Rectangle.Round(cell), slots[i].Status("\r\n"));
                     }
+                    for (int i = slots.Count; i < Capacity; i++) Ui.SetTooltip(tooltip, Handle, i, Rectangle.Empty, " ");
                 }
                 Ui.PushLayered(Handle, bmp);
             }
@@ -1076,6 +1180,7 @@ namespace TrayBattery
 
         readonly List<Slot> all = new List<Slot>();      // fixed: the poll thread's order
         readonly List<Slot> slots;                       // taskbar order, UI thread only (settings reorder it)
+        readonly List<Slot> shown = new List<Slot>();    // slots on the taskbar: dongle present, or seen on this PC before
         readonly TaskbarWidget widget;
         SettingsWindow settings;
         readonly Queue<Action> invokes = new Queue<Action>();
@@ -1088,8 +1193,7 @@ namespace TrayBattery
             Create(Ui.WS_EX_TOOLWINDOW, Ui.WS_POPUP, IntPtr.Zero, 0, 0);
             Ui.WTSRegisterSessionNotification(Handle, 0 /* NOTIFY_FOR_THIS_SESSION */);
 
-            all.Add(new Slot { Gadget = new AtkMouse() });
-            all.Add(new Slot { Gadget = new HyperXCloud3S() });
+            foreach (var g in Gadget.All()) all.Add(new Slot { Gadget = g });
             slots = new List<Slot>(all);
             Settings.SortByOrder(slots);
             foreach (var slot in all)
@@ -1099,7 +1203,8 @@ namespace TrayBattery
                 s.Listener = new PushListener(s.Gadget, rep => OnPush(s, rep));
             }
 
-            widget = new TaskbarWidget(slots, Poll, ShowMenu, OnHover);
+            RefreshShown();
+            widget = new TaskbarWidget(shown, Poll, ShowMenu, OnHover);
             // At sign-in the taskbar may not exist yet; TaskbarCreated attaches the widget then.
             widget.Attach();
 
@@ -1166,7 +1271,7 @@ namespace TrayBattery
             const int CmdRefresh = 1, CmdSettings = 2, CmdExit = 4;
 
             IntPtr m = Ui.CreatePopupMenu();
-            foreach (var s in slots) Ui.AppendMenu(m, MF_STRING | MF_GRAYED, IntPtr.Zero, s.MenuLine());
+            foreach (var s in shown) Ui.AppendMenu(m, MF_STRING | MF_GRAYED, IntPtr.Zero, s.MenuLine());
             Ui.AppendMenu(m, MF_SEPARATOR, IntPtr.Zero, null);
             Ui.AppendMenu(m, MF_STRING, new IntPtr(CmdRefresh), "Refresh");
             Ui.AppendMenu(m, MF_STRING, new IntPtr(CmdSettings), "Settings…");
@@ -1205,12 +1310,29 @@ namespace TrayBattery
         void ShowSettings(Ui.POINT near)
         {
             if (settings == null || settings.Handle == IntPtr.Zero)
-                settings = new SettingsWindow(slots, OnSettingsChanged);
+                settings = new SettingsWindow(slots, shown, OnSettingsChanged);
             settings.Show(near);
+        }
+
+        // A device is on the taskbar while its dongle is plugged in, and also after that once it has been
+        // seen on this PC (then it shows as "no link"); others' devices never appear. true if the set changed.
+        bool RefreshShown()
+        {
+            var before = new List<Slot>(shown);
+            shown.Clear();
+            foreach (var s in slots)
+            {
+                try { s.Present = s.Gadget.Present(); } catch (Exception) { s.Present = false; }
+                if (s.Present || s.HasValue) shown.Add(s);
+            }
+            if (before.Count != shown.Count) return true;
+            for (int i = 0; i < shown.Count; i++) if (before[i] != shown[i]) return true;
+            return false;
         }
 
         void OnSettingsChanged(bool pollChanged)
         {
+            RefreshShown();
             if (pollChanged && !paused) StartPollTimer();
             // Thresholds / charge rate change what is drawn: recompute (estimate) and repaint.
             foreach (var s in all) if (s.HasValue) s.Update(s.Last);
@@ -1224,7 +1346,7 @@ namespace TrayBattery
 
         void OnHover(int index)
         {
-            if (slots[index].Last.Online || Environment.TickCount - lastHoverPoll < 5000) return;
+            if (index >= shown.Count || shown[index].Last.Online || Environment.TickCount - lastHoverPoll < 5000) return;
             lastHoverPoll = Environment.TickCount;
             Poll();
         }
@@ -1233,6 +1355,7 @@ namespace TrayBattery
         {
             Hid.Invalidate();
             foreach (var s in slots) s.Listener.Rescan();
+            if (RefreshShown()) widget.Layout(true);
             Kick(2000);
         }
 
@@ -1275,7 +1398,8 @@ namespace TrayBattery
         {
             bool changed = false;
             for (int i = 0; i < all.Count && i < res.Length; i++) changed |= all[i].Update(res[i]);
-            if (changed) widget.Paint();
+            if (RefreshShown()) widget.Layout(true);
+            else if (changed) widget.Paint();
         }
 
         void OnPush(Slot s, byte[] report)
@@ -1343,16 +1467,17 @@ namespace TrayBattery
 
         public static IntPtr Open { get; private set; }
 
-        readonly List<Slot> slots;
+        readonly List<Slot> slots, shown;              // full order / the devices on this PC's taskbar
         readonly Action<bool> changed;                 // true: the poll interval changed
         readonly List<IntPtr> advanced = new List<IntPtr>();
         IntPtr font, list, up, down, close;
         int dpi = 96;
         bool loading;
 
-        public SettingsWindow(List<Slot> slots, Action<bool> changed)
+        public SettingsWindow(List<Slot> slots, List<Slot> shown, Action<bool> changed)
         {
             this.slots = slots;
+            this.shown = shown;
             this.changed = changed;
         }
 
@@ -1455,7 +1580,7 @@ namespace TrayBattery
         void FillList(int select)
         {
             Ui.SendMessage(list, LB_RESETCONTENT, IntPtr.Zero, IntPtr.Zero);
-            foreach (var s in slots) Ui.SendMessage(list, LB_ADDSTRING, IntPtr.Zero, s.Gadget.Name);
+            foreach (var s in shown) Ui.SendMessage(list, LB_ADDSTRING, IntPtr.Zero, s.Gadget.Name);
             Ui.SendMessage(list, LB_SETCURSEL, new IntPtr(select), IntPtr.Zero);
             UpdateButtons();
         }
@@ -1512,17 +1637,18 @@ namespace TrayBattery
         {
             int i = Selected;
             Ui.EnableWindow(up, i > 0);
-            Ui.EnableWindow(down, i >= 0 && i < slots.Count - 1);
+            Ui.EnableWindow(down, i >= 0 && i < shown.Count - 1);
         }
 
         void Move(int delta)
         {
             int i = Selected, j = i + delta;
-            if (i < 0 || j < 0 || j >= slots.Count) return;
-            var t = slots[i]; slots[i] = slots[j]; slots[j] = t;
+            if (i < 0 || j < 0 || j >= shown.Count) return;
+            int a = slots.IndexOf(shown[i]), b = slots.IndexOf(shown[j]);
+            var t = slots[a]; slots[a] = slots[b]; slots[b] = t;
             Settings.SaveOrder(slots);
+            changed(false);                            // re-builds the shown list in the new order
             FillList(j);
-            changed(false);
         }
 
         protected override bool OnMessage(int msg, IntPtr wp, IntPtr lp, out IntPtr result)
